@@ -3,33 +3,47 @@ pipeline {
 
     environment {
         REMOTE_HOST = "poojitha@192.168.1.158"
-        CRED_ID = "ubuntu-remote-key"   // Jenkins credential ID
+        CRED_ID = "ubuntu_remote_key"   // Jenkins SSH key credential ID
+        REMOTE_DIR = "/home/poojitha/fio-tests"
     }
 
     stages {
+
         stage('Checkout Code') {
             steps {
+                echo "📥 Checking out repository..."
                 checkout scm
             }
         }
 
-        stage('Copy Files to Remote') {
+        stage('Prepare Remote Directory') {
             steps {
-                sshagent([env.CRED_ID]) {
+                sshagent(credentials: [env.CRED_ID]) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no $REMOTE_HOST 'mkdir -p /tmp/fio_jobs /tmp/fio_scripts'
-                        scp jobs/storage_test.fio $REMOTE_HOST:/tmp/fio_jobs/storage_test.fio
-                        scp scripts/run_fio.sh $REMOTE_HOST:/tmp/fio_scripts/run_fio.sh
+                        ssh -o StrictHostKeyChecking=no $REMOTE_HOST 'mkdir -p $REMOTE_DIR/results'
                     """
                 }
             }
         }
 
-        stage('Run FIO on Remote') {
+        stage('Copy FIO Job & Script') {
             steps {
-                sshagent([env.CRED_ID]) {
+                sshagent(credentials: [env.CRED_ID]) {
                     sh """
-                        ssh $REMOTE_HOST 'chmod +x /tmp/fio_scripts/run_fio.sh && /tmp/fio_scripts/run_fio.sh'
+                        scp -o StrictHostKeyChecking=no jobs/storage_test.fio $REMOTE_HOST:$REMOTE_DIR/
+                        scp -o StrictHostKeyChecking=no scripts/run_fio.sh $REMOTE_HOST:$REMOTE_DIR/
+                        ssh $REMOTE_HOST 'chmod +x $REMOTE_DIR/run_fio.sh'
+                    """
+                }
+            }
+        }
+
+        stage('Run FIO Workload') {
+            steps {
+                sshagent(credentials: [env.CRED_ID]) {
+                    sh """
+                        echo "▶️ Running FIO on remote Ubuntu..."
+                        ssh $REMOTE_HOST '$REMOTE_DIR/run_fio.sh'
                     """
                 }
             }
@@ -37,10 +51,11 @@ pipeline {
 
         stage('Fetch Results') {
             steps {
-                sshagent([env.CRED_ID]) {
+                sshagent(credentials: [env.CRED_ID]) {
                     sh """
+                        echo "📂 Copying results back to Jenkins workspace..."
                         mkdir -p results
-                        scp -r $REMOTE_HOST:/tmp/fio_results/* results/
+                        scp -o StrictHostKeyChecking=no -r $REMOTE_HOST:$REMOTE_DIR/results/* results/
                     """
                 }
             }
@@ -49,10 +64,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ FIO workload executed successfully and results copied back."
+            echo "✅ FIO workload executed successfully and results copied."
         }
         failure {
-            echo "❌ FIO workload failed! Check logs."
+            echo "❌ FIO workload failed! Check console logs."
         }
     }
 }
